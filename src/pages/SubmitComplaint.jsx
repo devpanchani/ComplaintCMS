@@ -29,7 +29,13 @@ const PRIORITIES = ['low', 'medium', 'high', 'critical'];
 const DEPARTMENTS = ['Computer Science', 'Information Technology', 'Electronics', 'Mechanical', 'Civil', 'Electrical', 'Other'];
 const YEARS = ['1st Year', '2nd Year', '3rd Year', '4th Year', 'Postgraduate'];
 
-function FormField({ label, icon: Icon, children, error }) {
+// ── Validation rules ────────────────────────────────────────
+// Proper email: local@domain.tld  (RFC 5322 simplified)
+const EMAIL_REGEX = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
+// Phone: 7-15 digits, optional leading +, spaces/dashes allowed
+const PHONE_REGEX = /^[+]?[\d][\d\s\-().]{5,18}[\d]$/;
+
+function FormField({ label, icon: Icon, children, error, success }) {
   return (
     <div className="space-y-1.5">
       <label className="flex items-center gap-1.5 text-sm font-medium text-slate-300">
@@ -37,12 +43,20 @@ function FormField({ label, icon: Icon, children, error }) {
         {label}
       </label>
       {children}
-      {error && <p className="text-rose-400 text-xs flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{error}</p>}
+      {error   && <p className="text-rose-400 text-xs flex items-center gap-1 animate-fade-in"><AlertTriangle className="w-3 h-3 flex-shrink-0" />{error}</p>}
+      {!error && success && <p className="text-emerald-400 text-xs flex items-center gap-1 animate-fade-in"><CheckCircle className="w-3 h-3 flex-shrink-0" />{success}</p>}
     </div>
   );
 }
 
-const inputClass = "w-full px-4 py-2.5 rounded-xl bg-slate-800/60 border border-slate-600/50 text-white placeholder-slate-500 text-sm input-focus";
+// Dynamic input class — red border on error, green on valid focus
+const inputCls = (err, ok) =>
+  `w-full px-4 py-2.5 rounded-xl border text-white placeholder-slate-500 text-sm input-focus transition-all duration-200 ${
+    err ? 'bg-rose-500/5 border-rose-500/50'
+    : ok ? 'bg-emerald-500/5 border-emerald-500/30'
+    : 'bg-slate-800/60 border-slate-600/50'
+  }`;
+
 const selectClass = "w-full px-4 py-2.5 rounded-xl bg-slate-800/60 border border-slate-600/50 text-white text-sm input-focus appearance-none cursor-pointer";
 
 export default function SubmitComplaint() {
@@ -66,12 +80,13 @@ export default function SubmitComplaint() {
     studentDepartment: 'Computer Science',
     studentYear: '1st Year',
     email: currentUser?.email || '',
-    phone: '',
+    phone: '+91 ',
   });
 
   const update = (field, value) => {
     setForm(prev => ({ ...prev, [field]: value }));
-    setErrors(prev => ({ ...prev, [field]: '' }));
+    // Clear error as user types
+    if (errors[field]) setErrors(prev => ({ ...prev, [field]: '' }));
   };
 
   const handleFileChange = (e) => {
@@ -80,13 +95,49 @@ export default function SubmitComplaint() {
     }
   };
 
+  // Real-time validation on blur (single field)
+  const validateField = (field) => {
+    const v = (form[field] || '').trim();
+    let err = '';
+    if (field === 'email') {
+      if (!v)                          err = 'Email address is required';
+      else if (!EMAIL_REGEX.test(v))   err = 'Enter a valid email — e.g. name@university.edu';
+    }
+    if (field === 'phone') {
+      // Extract digits after the +91 prefix
+      const digits = v.replace('+91', '').replace(/\D/g, '');
+      if (digits.length > 0 && digits.length < 10) err = 'Enter a valid 10-digit mobile number';
+      if (digits.length > 10)                       err = 'Mobile number must be exactly 10 digits';
+    }
+    if (err) setErrors(prev => ({ ...prev, [field]: err }));
+  };
+
+  // Check if a field currently has a valid value (for green state)
+  const isValid = (field) => {
+    const v = (form[field] || '').trim();
+    if (field === 'email') return v && EMAIL_REGEX.test(v) && !errors.email;
+    if (field === 'phone') {
+      const digits = (form.phone || '').replace('+91', '').replace(/\D/g, '');
+      return digits.length === 10 && !errors.phone;
+    }
+    return false;
+  };
+
+  // Full form validation before AI step
   const validate = () => {
     const e = {};
-    if (!form.submittedBy.trim()) e.submittedBy = 'Name is required';
-    if (!form.rollNumber.trim()) e.rollNumber = 'Roll number is required';
-    if (!form.email.trim() || !/\S+@\S+\.\S+/.test(form.email)) e.email = 'Valid email is required';
-    if (!form.title.trim()) e.title = 'Title/Subject is required';
-    if (!form.description.trim() || form.description.length < 20) e.description = 'Description must be at least 20 characters';
+    if (!form.submittedBy.trim())   e.submittedBy = 'Full name is required';
+    if (!form.rollNumber.trim())    e.rollNumber  = 'Roll number is required';
+    if (!form.email.trim())         e.email = 'Email address is required';
+    else if (!EMAIL_REGEX.test(form.email.trim())) e.email = 'Enter a valid email — e.g. name@university.edu';
+    if (form.phone.trim()) {
+      const digits = form.phone.replace('+91', '').replace(/\D/g, '');
+      if (digits.length > 0 && digits.length !== 10)
+        e.phone = 'Enter a valid 10-digit mobile number after +91';
+    }
+    if (!form.title.trim())         e.title = 'Subject / title is required';
+    if (!form.description.trim() || form.description.length < 20)
+      e.description = 'Description must be at least 20 characters';
     return e;
   };
 
@@ -219,10 +270,10 @@ export default function SubmitComplaint() {
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                 <FormField label="Full Name" icon={User} error={errors.submittedBy}>
-                  <input className={inputClass} placeholder="Student Name" value={form.submittedBy} onChange={e => update('submittedBy', e.target.value)} />
+                  <input className={inputCls(errors.submittedBy)} placeholder="Student Name" value={form.submittedBy} onChange={e => update('submittedBy', e.target.value)} />
                 </FormField>
                 <FormField label="Roll Number" icon={IdCard} error={errors.rollNumber}>
-                  <input className={inputClass} placeholder="e.g. CS21B1001" value={form.rollNumber} onChange={e => update('rollNumber', e.target.value)} />
+                  <input className={inputCls(errors.rollNumber)} placeholder="e.g. CS21B1001" value={form.rollNumber} onChange={e => update('rollNumber', e.target.value)} />
                 </FormField>
                 <FormField label="Department" icon={GraduationCap}>
                   <select className={selectClass} value={form.studentDepartment} onChange={e => update('studentDepartment', e.target.value)}>
@@ -234,11 +285,77 @@ export default function SubmitComplaint() {
                     {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
                   </select>
                 </FormField>
-                <FormField label="Email Address" icon={Mail} error={errors.email}>
-                  <input type="email" className={inputClass} placeholder="student@university.edu" value={form.email} onChange={e => update('email', e.target.value)} />
+                <FormField
+                  label="Email Address" icon={Mail}
+                  error={errors.email}
+                  success={isValid('email') ? 'Valid email address ✓' : ''}
+                >
+                  <div className="relative">
+                    <input
+                      type="email"
+                      className={inputCls(errors.email, isValid('email'))}
+                      placeholder="student@university.edu"
+                      value={form.email}
+                      onChange={e => update('email', e.target.value)}
+                      onBlur={() => validateField('email')}
+                      autoComplete="email"
+                    />
+                    {isValid('email') && (
+                      <CheckCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-400 pointer-events-none" />
+                    )}
+                    {errors.email && (
+                      <AlertTriangle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-rose-400 pointer-events-none" />
+                    )}
+                  </div>
                 </FormField>
-                <FormField label="Phone Number" icon={Phone}>
-                  <input className={inputClass} placeholder="+91 98765 43210" value={form.phone} onChange={e => update('phone', e.target.value)} />
+
+                <FormField
+                  label="Phone Number" icon={Phone}
+                  error={errors.phone}
+                  success={isValid('phone') ? 'Valid mobile number ✓' : ''}
+                >
+                  {/* Fixed +91 prefix + digit-only input */}
+                  <div
+                    className={`flex items-center rounded-xl border overflow-hidden transition-all duration-200 ${
+                      errors.phone
+                        ? 'border-rose-500/50 bg-rose-500/5'
+                        : isValid('phone')
+                        ? 'border-emerald-500/30 bg-emerald-500/5'
+                        : 'border-slate-600/50 bg-slate-800/60'
+                    }`}
+                  >
+                    {/* Prefix badge */}
+                    <div className="flex items-center gap-1.5 px-3 py-2.5 border-r border-slate-600/50 bg-slate-700/40 flex-shrink-0 select-none">
+                      <span className="text-lg leading-none">🇮🇳</span>
+                      <span className="text-white font-semibold text-sm">+91</span>
+                    </div>
+
+                    {/* Number input */}
+                    <input
+                      type="tel"
+                      inputMode="numeric"
+                      className="flex-1 px-3 py-2.5 bg-transparent text-white placeholder-slate-500 text-sm outline-none min-w-0"
+                      placeholder="98765 43210"
+                      value={form.phone.replace(/^\+91\s?/, '')}
+                      onChange={e => {
+                        // Only allow digits and spaces
+                        const digits = e.target.value.replace(/[^\d\s]/g, '').slice(0, 12);
+                        update('phone', '+91 ' + digits);
+                      }}
+                      onBlur={() => validateField('phone')}
+                      autoComplete="tel-national"
+                      maxLength={12}
+                    />
+
+                    {/* Status icon */}
+                    {isValid('phone') && (
+                      <CheckCircle className="w-4 h-4 text-emerald-400 mr-3 flex-shrink-0" />
+                    )}
+                    {errors.phone && (
+                      <AlertTriangle className="w-4 h-4 text-rose-400 mr-3 flex-shrink-0" />
+                    )}
+                  </div>
+                  <p className="text-slate-600 text-xs mt-1">Optional · Enter 10-digit Indian mobile number</p>
                 </FormField>
               </div>
             </div>
@@ -267,13 +384,13 @@ export default function SubmitComplaint() {
                 </div>
 
                 <FormField label="Subject / Title" icon={MessageSquare} error={errors.title}>
-                  <input className={inputClass} placeholder="Brief subject" value={form.title} onChange={e => update('title', e.target.value)} />
+                  <input className={inputCls(errors.title)} placeholder="Brief subject" value={form.title} onChange={e => update('title', e.target.value)} />
                 </FormField>
 
                 <FormField label="Detailed Description" icon={MessageSquare} error={errors.description}>
                   <textarea
                     rows={4}
-                    className={`${inputClass} resize-none`}
+                    className={`${inputCls(errors.description)} resize-none`}
                     placeholder="Describe your issue in detail..."
                     value={form.description}
                     onChange={e => update('description', e.target.value)}
@@ -346,7 +463,7 @@ export default function SubmitComplaint() {
                   </div>
                   <div>
                     <h3 className="text-white font-semibold">AI Insights</h3>
-                    <p className="text-slate-500 text-xs">Powered by Gemini 1.5 Flash</p>
+                    <p className="text-slate-500 text-xs">Powered by OpenRouter AI</p>
                   </div>
                 </div>
 

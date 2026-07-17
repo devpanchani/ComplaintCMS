@@ -8,4 +8,15 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  server: {
+    proxy: {
+      // Proxy OpenRouter API calls to avoid browser CORS issues in development
+      '/openrouter': {
+        target: 'https://openrouter.ai',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/openrouter/, ''),
+        secure: true,
+      },
+    },
+  },
 })

@@ -1,19 +1,57 @@
-// Gemini API integration service
-import { GoogleGenerativeAI } from '@google/generative-ai';
+// OpenRouter API integration service
+const API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY;
+// Use Vite dev-proxy path in dev, direct URL in prod
+const BASE_URL = import.meta.env.DEV
+  ? '/openrouter/api/v1/chat/completions'
+  : 'https://openrouter.ai/api/v1/chat/completions';
+// Correct OpenRouter model IDs — provider/model-version format
+const DEFAULT_MODEL = 'openai/gpt-4o-mini';   // Most reliable, fast & cheap
+const PRO_MODEL     = 'openai/gpt-4o';        // Used for deep analytics only
 
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+/**
+ * Core helper — calls OpenRouter and returns the text response
+ */
+async function callOpenRouter(prompt, model = DEFAULT_MODEL) {
+  if (!API_KEY) {
+    throw new Error('OpenRouter API key not configured. Add VITE_OPENROUTER_API_KEY to your .env file.');
+  }
 
-let genAI = null;
+  const response = await fetch(BASE_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'http://localhost:5173',
+      'X-Title': 'ComplaintCMS',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
+      max_tokens: 2048,
+    }),
+  });
 
-if (API_KEY && API_KEY !== 'your_gemini_api_key_here') {
-  genAI = new GoogleGenerativeAI(API_KEY);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const msg = errorData.error?.message || `OpenRouter API error: ${response.status} ${response.statusText}`;
+    console.error('[OpenRouter] Request failed:', msg, '| Model:', model);
+    throw new Error(msg);
+  }
+
+  const data = await response.json();
+  if (!data.choices?.[0]?.message?.content) {
+    console.error('[OpenRouter] Unexpected response shape:', data);
+    throw new Error('Empty or malformed response from OpenRouter');
+  }
+  return data.choices[0].message.content.trim();
 }
 
 /**
- * Analyze a complaint and suggest priority, category, sentiment, etc., using Gemini AI
+ * Analyze a complaint and suggest priority, category, sentiment, etc., using AI
  */
 export async function analyzeComplaint(title, description) {
-  if (!genAI) {
+  if (!API_KEY) {
     return {
       priority: 'medium',
       category: 'Other',
@@ -21,14 +59,15 @@ export async function analyzeComplaint(title, description) {
       sentiment: 'Neutral',
       urgency: 'Moderate',
       keyIssues: ['AI analysis unavailable'],
-      summary: 'AI analysis unavailable – please configure your Gemini API key.',
+      summary: 'AI analysis unavailable – please configure your OpenRouter API key.',
       suggestedResponse: 'Thank you for your complaint. We will review it shortly.',
+      suggestedSolution: 'An admin will contact you shortly.',
+      estimatedResolutionTime: '3-5 business days',
+      helpfulTips: ['Keep your complaint ID handy for reference.'],
     };
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-
     const prompt = `You are an AI assistant for a university complaint management system.
 Analyze the following complaint and respond with a JSON object only (no markdown formatting, no extra text).
 
@@ -54,17 +93,14 @@ Important Logic Constraints:
 - If the sentiment is 'Critical', the 'priority' MUST be set to 'critical'.
 - Detect emotional tone deeply focusing on frustration indicating a Critical score.`;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
-
-    // Extract JSON from response
+    const text = await callOpenRouter(prompt);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
     }
     throw new Error('Invalid response format');
   } catch (error) {
-    console.error('Gemini API error:', error);
+    console.error('OpenRouter API error:', error);
     return {
       priority: 'medium',
       category: 'Other',
@@ -85,9 +121,8 @@ Important Logic Constraints:
  * Generate a personalized draft response block for admin panel
  */
 export async function generateAutoResponseDraft(complaint) {
-  if (!genAI) return 'AI auto-responder unavailable.';
+  if (!API_KEY) return 'AI auto-responder unavailable. Please configure your OpenRouter API key.';
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     const prompt = `Draft a personalized, professional email response to this student complaint.
 Student: ${complaint.submittedBy}
 Category: ${complaint.category}
@@ -95,25 +130,22 @@ Issue: ${complaint.description}
 Status: ${complaint.status}
 
 The tone should be empathetic, assuring action, and formal. Keep it to 3-4 short paragraphs without placeholders if possible.`;
-    const result = await model.generateContent(prompt);
-    return result.response.text().trim();
+    return await callOpenRouter(prompt);
   } catch (error) {
+    console.error('OpenRouter API error:', error);
     return 'Failed to generate draft. Please write manually.';
   }
 }
-
 
 /**
  * Generate a resolution summary for a complaint
  */
 export async function generateResolutionSummary(complaint) {
-  if (!genAI) {
-    return 'AI resolution summary unavailable. Please configure your Gemini API key in the .env file.';
+  if (!API_KEY) {
+    return 'AI resolution summary unavailable. Please configure your OpenRouter API key in the .env file.';
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-
     const prompt = `Generate a professional resolution summary for this complaint:
 Title: ${complaint.title}
 Category: ${complaint.category}
@@ -123,10 +155,9 @@ Status: ${complaint.status}
 
 Write a brief, professional 2-3 sentence resolution summary that could be sent to the customer.`;
 
-    const result = await model.generateContent(prompt);
-    return result.response.text().trim();
+    return await callOpenRouter(prompt);
   } catch (error) {
-    console.error('Gemini API error:', error);
+    console.error('OpenRouter API error:', error);
     return 'Unable to generate resolution summary at this time.';
   }
 }
@@ -135,13 +166,11 @@ Write a brief, professional 2-3 sentence resolution summary that could be sent t
  * Get AI-powered insights for the admin dashboard
  */
 export async function getDashboardInsights(stats) {
-  if (!genAI) {
-    return 'Configure your Gemini API key to receive AI-powered insights about your complaint trends.';
+  if (!API_KEY) {
+    return 'Configure your OpenRouter API key to receive AI-powered insights about your complaint trends.';
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-
     const prompt = `As a complaint management AI analyst, provide 2-3 concise insights based on these stats:
 - Total complaints: ${stats.total}
 - Pending: ${stats.pending}
@@ -151,10 +180,9 @@ export async function getDashboardInsights(stats) {
 
 Provide actionable insights in 2-3 short bullet points.`;
 
-    const result = await model.generateContent(prompt);
-    return result.response.text().trim();
+    return await callOpenRouter(prompt);
   } catch (error) {
-    console.error('Gemini API error:', error);
+    console.error('OpenRouter API error:', error);
     return 'Unable to fetch AI insights at this time.';
   }
 }
@@ -163,16 +191,14 @@ Provide actionable insights in 2-3 short bullet points.`;
  * Perform semantic search across complaints to find related ones
  */
 export async function performSemanticSearch(query, complaints) {
-  if (!genAI || !query || complaints.length === 0) return [];
+  if (!API_KEY || !query || complaints.length === 0) return [];
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    
     const searchableData = complaints.map(c => ({
       id: c.id,
       title: c.title,
       desc: c.description,
-      cat: c.category
+      cat: c.category,
     }));
 
     const prompt = `You are a semantic search engine matching a user query to complaints databases.
@@ -189,9 +215,7 @@ Each object must have:
 
 Respond ONLY with the precise JSON array.`;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
-
+    const text = await callOpenRouter(prompt);
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
@@ -207,11 +231,9 @@ Respond ONLY with the precise JSON array.`;
  * Perform comprehensive deep analytics across all institutional metrics
  */
 export async function generateDeepAnalytics(complaints) {
-  if (!genAI || !complaints || complaints.length === 0) return null;
+  if (!API_KEY || !complaints || complaints.length === 0) return null;
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' }); // Using PRO model for massive context analysis
-    
     // Minimized data footprint to prevent overwhelming token context
     const dataset = complaints.map(c => ({
       id: c.id,
@@ -219,7 +241,7 @@ export async function generateDeepAnalytics(complaints) {
       department: c.department || c.studentDepartment,
       priority: c.priority,
       status: c.status,
-      desc: c.description.substring(0, 500) // Truncated to avoid extreme token lengths
+      desc: c.description.substring(0, 500), // Truncated to avoid extreme token lengths
     }));
 
     const prompt = `You are a Senior Strategic Data Operations AI analyzing incident reports for a university/organization. 
@@ -247,9 +269,8 @@ Respond ONLY with exactly this JSON structure (no markdown, no extra text):
   ]
 }`;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
-
+    // Use the pro model for deep analytics (higher reasoning quality)
+    const text = await callOpenRouter(prompt, PRO_MODEL);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
